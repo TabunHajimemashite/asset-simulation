@@ -65,6 +65,7 @@
   <button onclick="addChange()">＋ 収支変動を追加</button>
 
   <hr>
+  <audio id="technoAudio" src="technoaudio.mp3" preload="auto"></audio>
   <button onclick="runSimulation()">▶ シミュレーション実行</button>
 
   <h2>📊 結果</h2>
@@ -135,6 +136,12 @@
   }
 
   function runSimulation() {
+    const audio = document.getElementById("technoAudio");
+    if (audio) {
+      audio.currentTime = 0;  // 先頭から再生（連打に対応）
+      audio.play();
+    }
+
     const startAge = parseInt(document.getElementById('age').value);
     let assets = parseFloat(document.getElementById('totalAssets').value);
     const defence = parseFloat(document.getElementById('defenceAmount').value);
