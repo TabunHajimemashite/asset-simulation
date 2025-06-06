@@ -140,6 +140,8 @@
     if (audio) {
       audio.currentTime = 0;  // 先頭から再生（連打に対応）
       audio.play();
+    } else {
+      console.error("audioタグが見つかりません");
     }
 
     const startAge = parseInt(document.getElementById('age').value);
