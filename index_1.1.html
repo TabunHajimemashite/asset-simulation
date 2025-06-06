@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>資産シミュレーター</title>
+  <style>
+    body { font-family:'メイリオ', 'Meiryo', sans-serif; margin: 20px; }
+    input, select { margin-bottom: 5px; }
+    table, th, td { border: 1px solid #ccc; border-collapse: collapse; padding: 5px; }
+    th { background-color: #f0f0f0; }
+    .event-entry { margin-bottom: 5px; }
+    canvas { margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1>📊 資産シミュレーター ver.1</h1>
+
+  <h2>🔢 基本入力</h2>
+  <label>現年齢（歳）：<input type="number" id="age" value="30"></label><br>
+  <label>現総資産額（万円）：<input type="number" id="totalAssets" value="1000"></label><br>
+  <label>生活防衛金額（万円）：<input type="number" id="defenceAmount" value="300"></label><br>
+  <label>現収入額（万円/月）：<input type="number" id="income" value="30"></label><br>
+  <label>想定利回り（%/年）：<input type="number" id="rate" value="4"></label><br>
+  <label><input type="checkbox" id="randomizeReturn"> 利回りをランダムに変動させる</label><br>
+
+  <label>📉 経済ショック発生： 
+    <select id="shockMode">
+      <option value="none">発生しない</option>
+      <option value="random">急な変動の発生</option>
+      <option value="deflation">デフレのみ発生</option>
+    </select>
+  </label><br>
+
+  <h2>💸 支出設定</h2>
+  <label><input type="radio" name="spendingType" value="fixed" checked> 定額支出</label>
+  <input type="number" id="fixedExpense" value="25"> 万円/月<br>
+
+  <label><input type="radio" name="spendingType" value="percentage"> 変動支出</label>
+  <input type="number" id="expenseRate" value="3"> %（月）<br>
+  <label style="margin-left: 1em;">最低支出額（万円/月）：<input type="number" id="minExpense" value="5"></label><br>
+
+  <h2>📅 臨時イベント入力</h2>
+  <div id="eventList">
+    <div class="event-entry">
+      <input type="month" class="eventDate" value="2030-01">
+      <input type="number" class="eventAmount" value="100"> 万円
+      <button onclick="this.parentNode.remove()">削除</button>
+    </div>
+  </div>
+  <button onclick="addEvent()">＋ 臨時イベントを追加</button>
+
+  <h2>📈 収支変動イベント入力</h2>
+  <div id="changeList">
+    <div class="event-entry">
+      <select class="changeTarget">
+        <option value="income">収入</option>
+        <option value="expense">支出</option>
+      </select>
+      <input type="month" class="changeDate" value="2035-01">
+      <input type="number" class="changeAmount" value="35"> 万円/月
+      <button onclick="this.parentNode.remove()">削除</button>
+    </div>
+  </div>
+  <button onclick="addChange()">＋ 収支変動を追加</button>
+
+  <hr>
+  <button onclick="runSimulation()">▶ シミュレーション実行</button>
+
+  <h2>📊 結果</h2>
+  <div id="result"></div>
+  <canvas id="assetChart" width="1000" height="400"></canvas>
+
+<!-- 中略（<head>と<body>内のスタイル・HTML構造は変更なし） -->
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@1.4.0"></script>
+
+
+<script>
+  let chartInstance = null;
+
+  function addEvent() {
+    const container = document.getElementById('eventList');
+    const div = document.createElement('div');
+    div.className = 'event-entry';
+    div.innerHTML = `
+      <input type="month" class="eventDate">
+      <input type="number" class="eventAmount"> 万円
+      <button onclick="this.parentNode.remove()">削除</button>
+    `;
+    container.appendChild(div);
+  }
+
+  function addChange() {
+    const container = document.getElementById('changeList');
+    const div = document.createElement('div');
+    div.className = 'event-entry';
+    div.innerHTML = `
+      <select class="changeTarget">
+        <option value="income">収入</option>
+        <option value="expense">支出</option>
+      </select>
+      <input type="month" class="changeDate">
+      <input type="number" class="changeAmount"> 万円/月
+      <button onclick="this.parentNode.remove()">削除</button>
+    `;
+    container.appendChild(div);
+  }
+
+  // ✅ 新しい入力構造に対応したイベント取得関数
+  function parseEvents() {
+    const events = [];
+
+    // 臨時イベント（資産加算）
+    document.querySelectorAll('#eventList .event-entry').forEach(entry => {
+      const dateInput = entry.querySelector('.eventDate');
+      const amountInput = entry.querySelector('.eventAmount');
+      const date = dateInput?.value;
+      const amount = parseFloat(amountInput?.value);
+      if (date && !isNaN(amount)) {
+        events.push({ type: 'extra', date, amount });
+      }
+    });
+
+    // 収支変動イベント
+    document.querySelectorAll('#changeList .event-entry').forEach(entry => {
+      const target = entry.querySelector('.changeTarget')?.value;
+      const date = entry.querySelector('.changeDate')?.value;
+      const amount = parseFloat(entry.querySelector('.changeAmount')?.value);
+      if (target && date && !isNaN(amount)) {
+        events.push({ type: target === 'income' ? 'incomeChange' : 'expenseChange', date, amount });
+      }
+    });
+
+    return events;
+  }
+
+  function runSimulation() {
+    const startAge = parseInt(document.getElementById('age').value);
+    let assets = parseFloat(document.getElementById('totalAssets').value);
+    const defence = parseFloat(document.getElementById('defenceAmount').value);
+    let currentIncome = parseFloat(document.getElementById('income').value);
+    const baseRate = parseFloat(document.getElementById('rate').value) / 100;
+    const randomize = document.getElementById('randomizeReturn').checked;
+    const shockMode = document.getElementById('shockMode').value;
+
+    const spendingType = document.querySelector('input[name="spendingType"]:checked').value;
+    const fixedExpense = parseFloat(document.getElementById('fixedExpense').value);
+    const expenseRate = parseFloat(document.getElementById('expenseRate').value) / 100;
+    const minExpense = parseFloat(document.getElementById('minExpense').value);
+
+    const events = parseEvents();
+
+    let currentExpense = spendingType === 'fixed' ? fixedExpense : Math.max((assets * expenseRate) / 12, minExpense);
+
+    let currentAge = startAge;
+    let year = new Date().getFullYear();
+    const results = [];
+    const labels = [];
+    const assetList = [];
+    const incomeList = [];
+    const returnList = [];
+    const expenseList = [];
+    const shockLog = [];
+
+    let fireAge = null;
+
+    while (currentAge <= 80) {
+      for (let m = 1; m <= 12; m++) {
+        const ym = `${year}-${String(m).padStart(2, '0')}`;
+
+        // 🔄 各月のイベント反映
+        events.forEach(e => {
+          if (e.date === ym) {
+            if (e.type === 'extra') assets += e.amount;
+            if (e.type === 'incomeChange') currentIncome = e.amount;
+            if (e.type === 'expenseChange') currentExpense = e.amount;
+          }
+        });
+
+        const investment = Math.max(assets - defence, 0);
+        let monthlyRate = baseRate / 12;
+        if (randomize) {
+          const variation = 1 + (Math.random() * 0.6 - 0.3);
+          monthlyRate *= variation;
+        }
+
+        let isShock = false;
+
+        if (shockMode !== 'none' && Math.random() < 0.01) {
+          const shockType = shockMode === 'deflation' ? 'deflation' : (Math.random() < 0.5 ? 'crash' : 'deflation');
+          if (shockType === 'crash') {
+            monthlyRate *= -0.2;
+            shockLog.push({ year, month: m, label: '⚡株価暴落' });
+          } else if (shockType === 'deflation') {
+            monthlyRate *= -0.05;
+            shockLog.push({ year, month: m, label: '📉デフレ' });
+          }
+          isShock = true;
+        }
+
+        const monthlyReturn = investment * monthlyRate;
+        const net = currentIncome + monthlyReturn - currentExpense;
+        assets += net;
+
+        if (spendingType === 'percentage') {
+          currentExpense = Math.max((assets * expenseRate) / 12, minExpense);
+        }
+
+        if (fireAge === null && monthlyReturn >= currentExpense) {
+          fireAge = currentAge + m / 12;
+        }
+      }
+
+      const investment = Math.max(assets - defence, 0);
+      const monthlyReturn = investment * (baseRate / 12);
+
+      if (currentAge % 10 === 0) {
+        results.push({
+          年齢: currentAge,
+          総資産額: Math.round(assets),
+          収入と投資利益: Math.round(currentIncome + monthlyReturn),
+          支出額: Math.round(currentExpense)
+        });
+      }
+
+      labels.push(`${currentAge}歳`);
+      assetList.push(Math.round(assets));
+      incomeList.push(currentIncome);
+      returnList.push(Math.round(monthlyReturn));
+      expenseList.push(-Math.round(currentExpense));
+
+      currentAge++;
+      year++;
+    }
+
+    const resultDiv = document.getElementById('result');
+    resultDiv.innerHTML = `<table>
+      <tr><th>年齢</th><th>総資産額（万円）</th><th>収入+投資利益（万円/月）</th><th>支出額（万円/月）</th></tr>` +
+      results.map(r => `<tr>
+        <td>${r.年齢}</td>
+        <td>${r.総資産額.toLocaleString()}</td>
+        <td>${r.収入と投資利益.toLocaleString()}</td>
+        <td>${r.支出額.toLocaleString()}</td>
+      </tr>`).join('') +
+      `</table>`;
+
+    if (fireAge !== null) {
+      resultDiv.innerHTML += `<p>🔥 <strong>FIRE達成年齢：</strong>約 ${fireAge.toFixed(1)} 歳</p>`;
+    } else {
+      resultDiv.innerHTML += `<p>🔥 <strong>FIRE達成はシミュレーション期間内にできませんでした。</strong></p>`;
+    }
+
+    const ctx = document.getElementById('assetChart').getContext('2d');
+    if (chartInstance) chartInstance.destroy();
+
+    const annotations = {};
+    shockLog.forEach((event, i) => {
+      const ageLabel = `${event.year - (new Date().getFullYear() - startAge)}歳`;
+      annotations[`shock${i}`] = {
+        type: 'line',
+        scaleID: 'x',
+        value: ageLabel,
+        borderColor: 'red',
+        borderWidth: 2,
+        label: {
+          content: event.label,
+          enabled: true,
+          position: 'start',
+          backgroundColor: 'rgba(255, 0, 0, 0.2)',
+          font: {
+            size: 10,
+          }
+        }
+      };
+    });
+
+    chartInstance = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            type: 'line',
+            label: '総資産額（万円）',
+            data: assetList,
+            borderColor: 'blue',
+            backgroundColor: 'transparent',
+            yAxisID: 'y',
+            tension: 0.3
+          },
+          {
+            label: '収入（万円/月）',
+            data: incomeList,
+            backgroundColor: 'green',
+            stack: 'stack1',
+            yAxisID: 'y2'
+          },
+          {
+            label: '投資利益（万円/月）',
+            data: returnList,
+            backgroundColor: 'orange',
+            stack: 'stack1',
+            yAxisID: 'y2'
+          },
+          {
+            label: '支出（-万円/月）',
+            data: expenseList,
+            backgroundColor: 'red',
+            stack: 'stack1',
+            yAxisID: 'y2'
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          annotation: {
+            annotations: annotations
+          },
+          title: {
+            display: true,
+            text: '資産推移と月次収支（万円単位）'
+          },
+          tooltip: {
+            mode: 'index',
+            intersect: false
+          }
+        },
+        scales: {
+          y: {
+            position: 'left',
+            title: { display: true, text: '総資産（万円）' },
+            beginAtZero: true
+          },
+          y2: {
+            position: 'right',
+            title: { display: true, text: '収支（万円／月）' },
+            beginAtZero: true,
+            grid: { drawOnChartArea: false },
+            stacked: true
+          },
+          x: {
+            title: { display: true, text: '年齢（歳）' }
+          }
+        }
+      }
+    });
+  }
+</script>
